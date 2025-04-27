@@ -4,11 +4,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net"
 	"strconv"
 	"sync"
+
+	"github.com/lonepie/reverse-soxy/internal/logger"
 )
 
 // socksListenAddr is set by RunClient
@@ -25,25 +26,23 @@ var (
 	clientMu      sync.Mutex
 )
 
-// RunClient starts the SOCKS proxy client and tunnel listener.
-// socksAddr: address for the SOCKS5 listener (e.g. "127.0.0.1:1080").
-// port: port for tunnel listener (e.g. 9000).
-func RunClient(socksAddr string, port int) {
+// RunSOCKSFrontend starts the SOCKS proxy client and tunnel listener.
+func RunSOCKSFrontend(socksAddr string, port int) {
 	// configure addresses
 	socksListenAddr = socksAddr
 	tunnelListenPort = port
-	log.Println("[CLIENT] Listening for tunnel on port", tunnelListenPort)
+	logger.Info("Listening for tunnel on port %d", tunnelListenPort)
 	go startTunnelListener()
 
 	ln, err := net.Listen("tcp", socksListenAddr)
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
-	log.Println("[CLIENT] SOCKS5 proxy listening on", socksListenAddr)
+	logger.Info("SOCKS5 proxy listening on %s", socksListenAddr)
 	for {
 		client, err := ln.Accept()
 		if err != nil {
-			log.Println("Accept error:", err)
+			logger.Println("Accept error:", err)
 			continue
 		}
 		go handleSOCKS(client)
@@ -53,16 +52,16 @@ func RunClient(socksAddr string, port int) {
 func startTunnelListener() {
 	ln, err := net.Listen("tcp", ":"+strconv.Itoa(tunnelListenPort))
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatalf("Tunnel listener failed: %v", err)
 	}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Fatal("Tunnel accept failed:", err)
+			logger.Fatal("Tunnel accept failed:", err)
 		}
 		tunnelMu.Lock()
 		if tunnelConn != nil {
-			log.Println("[CLIENT] Closing previous tunnel connection")
+			logger.Info("Closing previous tunnel connection")
 			tunnelConn.Close() // This will cause the old goroutine to exit
 		}
 		tunnelConn = conn
@@ -70,7 +69,7 @@ func startTunnelListener() {
 			tcpConn.SetNoDelay(true)
 		}
 		tunnelMu.Unlock()
-		log.Println("[CLIENT] Tunnel connected from", conn.RemoteAddr())
+		logger.Info("Tunnel connected from %v", conn.RemoteAddr())
 		go handleTunnelReadsClient(conn)
 	}
 }
@@ -80,12 +79,12 @@ func handleSOCKS(client net.Conn) {
 	// Step 1: Client greeting
 	n, err := io.ReadAtLeast(client, buf, 2)
 	if err != nil {
-		log.Printf("[CLIENT] SOCKS handshake failed: %v", err)
+		logger.Error("SOCKS handshake failed: %v", err)
 		client.Close()
 		return
 	}
 	if buf[0] != 0x05 {
-		log.Printf("[CLIENT] Unsupported SOCKS version: %v", buf[0])
+		logger.Error("Unsupported SOCKS version: %v", buf[0])
 		client.Close()
 		return
 	}
@@ -93,7 +92,7 @@ func handleSOCKS(client net.Conn) {
 	if n < int(2+methods) {
 		_, err = io.ReadFull(client, buf[n:2+methods])
 		if err != nil {
-			log.Printf("[CLIENT] SOCKS handshake method read failed: %v", err)
+			logger.Error("SOCKS handshake method read failed: %v", err)
 			client.Close()
 			return
 		}
@@ -101,7 +100,7 @@ func handleSOCKS(client net.Conn) {
 	// Step 2: Server selects 'no auth'
 	_, err = client.Write([]byte{0x05, 0x00})
 	if err != nil {
-		log.Printf("[CLIENT] Failed to write SOCKS5 method selection: %v", err)
+		logger.Error("Failed to write SOCKS5 method selection: %v", err)
 		client.Close()
 		return
 	}
@@ -109,12 +108,12 @@ func handleSOCKS(client net.Conn) {
 	// Step 3: Client connect request
 	n, err = io.ReadAtLeast(client, buf, 5)
 	if err != nil {
-		log.Printf("[CLIENT] SOCKS connect request failed: %v", err)
+		logger.Error("SOCKS connect request failed: %v", err)
 		client.Close()
 		return
 	}
 	if buf[0] != 0x05 || buf[1] != 0x01 {
-		log.Printf("[CLIENT] Only SOCKS5 CONNECT supported")
+		logger.Error("Only SOCKS5 CONNECT supported")
 		client.Close()
 		return
 	}
@@ -129,7 +128,7 @@ func handleSOCKS(client net.Conn) {
 	case 0x04: // IPv6
 		addrLen = 16
 	default:
-		log.Printf("[CLIENT] Unsupported address type: %v", addrType)
+		logger.Error("Unsupported address type: %v", addrType)
 		client.Close()
 		return
 	}
@@ -138,7 +137,7 @@ func handleSOCKS(client net.Conn) {
 	if n < reqLen {
 		_, err = io.ReadFull(client, buf[n:reqLen])
 		if err != nil {
-			log.Printf("[CLIENT] SOCKS connect request addr/port read failed: %v", err)
+			logger.Error("SOCKS connect request addr/port read failed: %v", err)
 			client.Close()
 			return
 		}
@@ -159,7 +158,7 @@ func handleSOCKS(client net.Conn) {
 		port := binary.BigEndian.Uint16(buf[20:22])
 		target = fmt.Sprintf("[%s]:%d", ip.String(), port)
 	}
-	log.Printf("[CLIENT] Request to %s", target)
+	logger.Info("Request to %s", target)
 
 	// Step 4: Send connect reply (success)
 	reply := make([]byte, 10)
@@ -171,7 +170,7 @@ func handleSOCKS(client net.Conn) {
 	binary.BigEndian.PutUint16(reply[8:], 1080) // bound port
 	_, err = client.Write(reply)
 	if err != nil {
-		log.Printf("[CLIENT] Failed to write SOCKS5 connect reply: %v", err)
+		logger.Error("Failed to write SOCKS5 connect reply: %v", err)
 		client.Close()
 		return
 	}
@@ -182,7 +181,7 @@ func handleSOCKS(client net.Conn) {
 	tunnelConnGlobal := tunnelConn
 	if tunnelConnGlobal == nil {
 		tunnelMu.Unlock()
-		log.Printf("[CLIENT] No tunnel connection available for session %08x", sessID)
+		logger.Error("No tunnel connection available for session %08x", sessID)
 		client.Close()
 		return
 	}
@@ -193,14 +192,14 @@ func handleSOCKS(client net.Conn) {
 	_, err = tunnelConnGlobal.Write(header)
 	if err != nil {
 		tunnelMu.Unlock()
-		log.Printf("[CLIENT] Failed to write session header: %v", err)
+		logger.Error("Failed to write session header: %v", err)
 		client.Close()
 		return
 	}
 	_, err = tunnelConnGlobal.Write([]byte(target))
 	if err != nil {
 		tunnelMu.Unlock()
-		log.Printf("[CLIENT] Failed to write target string: %v", err)
+		logger.Error("Failed to write target string: %v", err)
 		client.Close()
 		return
 	}
@@ -208,7 +207,7 @@ func handleSOCKS(client net.Conn) {
 	clientSess[sessID] = client
 	clientMu.Unlock()
 	tunnelMu.Unlock()
-	log.Println("[CLIENT] Tunnel connected from", tunnelConnGlobal.RemoteAddr())
+	logger.Info("Tunnel connected from %v", tunnelConnGlobal.RemoteAddr())
 	go forwardClientToTunnel(tunnelConnGlobal, client, sessID)
 }
 
@@ -228,51 +227,51 @@ func forwardClientToTunnel(dst net.Conn, src net.Conn, sessID uint32) {
 	buf := make([]byte, 4096)
 	header := make([]byte, 6)
 	binary.BigEndian.PutUint32(header[:4], sessID)
-	log.Printf("[CLIENT][DEBUG] tunnelConn pointer: %p, LocalAddr: %v, RemoteAddr: %v", dst, dst.LocalAddr(), dst.RemoteAddr())
+	logger.Debug("tunnelConn pointer: %p, LocalAddr: %v, RemoteAddr: %v", dst, dst.LocalAddr(), dst.RemoteAddr())
 	errorCh := make(chan error, 1)
 
 	// Forward src (SOCKS client) -> dst (tunnel)
 	go func() {
 		for {
-			log.Printf("[CLIENT] session %08x waiting to read from SOCKS client", sessID)
+			logger.Debug("session %08x waiting to read from SOCKS client", sessID)
 			n, err := src.Read(buf)
 			if err != nil {
-				log.Printf("[CLIENT] session %08x closed by client\n", sessID)
+				logger.Debug("session %08x closed by client", sessID)
 				errorCh <- err
 				return
 			}
 			binary.BigEndian.PutUint16(header[4:], uint16(n))
-			log.Printf("[CLIENT] session %08x preparing to send %d bytes\nPayload:\n%s\n", sessID, n, string(buf[:n]))
-			log.Printf("[CLIENT][DEBUG] Writing header+payload (%d bytes) to tunnel", n)
+			logger.Debug("session %08x preparing to send %d bytes. Payload:\n%s", sessID, n, string(buf[:n]))
+			logger.Debug("Writing header+payload (%d bytes) to tunnel", n)
 			tunnelWriteMu.Lock()
 			if err = writeFull(dst, header); err != nil {
 				tunnelWriteMu.Unlock()
-				log.Printf("[CLIENT] session %08x header+payload write failed: %v", sessID, err)
+				logger.Error("session %08x header+payload write failed: %v", sessID, err)
 				errorCh <- err
 				return
 			}
 			if err = writeFull(dst, buf[:n]); err != nil {
 				tunnelWriteMu.Unlock()
-				log.Printf("[CLIENT] session %08x header+payload write failed: %v", sessID, err)
+				logger.Error("session %08x header+payload write failed: %v", sessID, err)
 				errorCh <- err
 				return
 			}
 			tunnelWriteMu.Unlock()
-			log.Printf("[CLIENT] session %08x wrote header and %d payload bytes to tunnel", sessID, n)
+			logger.Debug("session %08x wrote header and %d payload bytes to tunnel", sessID, n)
 		}
 	}()
 
 	// Wait for either direction to error/close
 	err := <-errorCh
-	log.Printf("[CLIENT] session %08x closing, reason: %v", sessID, err)
+	logger.Info("session %08x closing, reason: %v", sessID, err)
 	// Do NOT close the shared tunnel connection here; only close the SOCKS client connection.
 	if src != nil {
-		log.Printf("[CLIENT][DEBUG] Closing SOCKS client %p", src)
+		logger.Debug("Closing SOCKS client %p", src)
 		err := src.Close()
 		if err != nil {
-			log.Printf("[CLIENT][DEBUG] Error closing SOCKS client: %v", err)
+			logger.Debug("Error closing SOCKS client: %v", err)
 		} else {
-			log.Printf("[CLIENT][DEBUG] SOCKS client closed successfully")
+			logger.Debug("SOCKS client closed successfully")
 		}
 	}
 	clientMu.Lock()
@@ -285,7 +284,7 @@ func handleTunnelReadsClient(tunnel net.Conn) {
 	for {
 		_, err := io.ReadFull(tunnel, header)
 		if err != nil {
-			log.Println("[CLIENT] Tunnel read error:", err)
+			logger.Println("Tunnel read error:", err)
 			return
 		}
 		sessID := binary.BigEndian.Uint32(header[:4])
@@ -293,19 +292,19 @@ func handleTunnelReadsClient(tunnel net.Conn) {
 		buf := make([]byte, length)
 		_, err = io.ReadFull(tunnel, buf)
 		if err != nil {
-			log.Println("[CLIENT] Payload read error for session", sessID, ":", err)
+			logger.Error("Payload read error for session %08x: %v", sessID, err)
 			return
 		}
 		clientMu.Lock()
 		client, ok := clientSess[sessID]
 		clientMu.Unlock()
 		if !ok {
-			log.Printf("[CLIENT] Received data for unknown or closed session %08x", sessID)
+			logger.Error("Received data for unknown or closed session %08x", sessID)
 			continue
 		}
 		_, err = client.Write(buf)
 		if err != nil {
-			log.Printf("[CLIENT] Write to SOCKS client for session %08x failed: %v", sessID, err)
+			logger.Error("Write to SOCKS client for session %08x failed: %v", sessID, err)
 			clientMu.Lock()
 			delete(clientSess, sessID)
 			clientMu.Unlock()
