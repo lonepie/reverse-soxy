@@ -47,19 +47,24 @@ func startTunnelListener() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	conn, err := ln.Accept()
-	if err != nil {
-		log.Fatal("Tunnel accept failed:", err)
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			log.Fatal("Tunnel accept failed:", err)
+		}
+		tunnelMu.Lock()
+		if tunnelConn != nil {
+			log.Println("[CLIENT] Closing previous tunnel connection")
+			tunnelConn.Close() // This will cause the old goroutine to exit
+		}
+		tunnelConn = conn
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			tcpConn.SetNoDelay(true)
+		}
+		tunnelMu.Unlock()
+		log.Println("[CLIENT] Tunnel connected from", conn.RemoteAddr())
+		go handleTunnelReadsClient(conn)
 	}
-	tunnelMu.Lock()
-	tunnelConn = conn
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tcpConn.SetNoDelay(true)
-	}
-	tunnelMu.Unlock()
-	log.Println("[CLIENT] Tunnel connected from", conn.RemoteAddr())
-	// Only ONE handleTunnelReadsClient should run per tunnel connection, routing by session ID.
-	go handleTunnelReadsClient(conn)
 }
 
 func handleSOCKS(client net.Conn) {
@@ -216,7 +221,7 @@ func forwardClientToTunnel(dst net.Conn, src net.Conn, sessID uint32) {
 	header := make([]byte, 6)
 	binary.BigEndian.PutUint32(header[:4], sessID)
 	log.Printf("[CLIENT][DEBUG] tunnelConn pointer: %p, LocalAddr: %v, RemoteAddr: %v", dst, dst.LocalAddr(), dst.RemoteAddr())
-	errorCh := make(chan error, 2)
+	errorCh := make(chan error, 1)
 
 	// Forward src (SOCKS client) -> dst (tunnel)
 	go func() {
@@ -230,61 +235,22 @@ func forwardClientToTunnel(dst net.Conn, src net.Conn, sessID uint32) {
 			}
 			binary.BigEndian.PutUint16(header[4:], uint16(n))
 			log.Printf("[CLIENT] session %08x preparing to send %d bytes\nPayload:\n%s\n", sessID, n, string(buf[:n]))
-			log.Printf("[CLIENT][DEBUG] Before header write: tunnelConn %p, LocalAddr: %v, RemoteAddr: %v", dst, dst.LocalAddr(), dst.RemoteAddr())
+			log.Printf("[CLIENT][DEBUG] Writing header+payload (%d bytes) to tunnel", n)
 			tunnelWriteMu.Lock()
-			err = writeFull(dst, header)
-			tunnelWriteMu.Unlock()
-			log.Printf("[CLIENT][DEBUG] After header write: tunnelConn %p, LocalAddr: %v, RemoteAddr: %v, err=%v", dst, dst.LocalAddr(), dst.RemoteAddr(), err)
-			if err != nil {
-				log.Printf("[CLIENT] session %08x header write failed: %v\n", sessID, err)
+			if err = writeFull(dst, header); err != nil {
+				tunnelWriteMu.Unlock()
+				log.Printf("[CLIENT] session %08x header+payload write failed: %v", sessID, err)
 				errorCh <- err
 				return
 			}
-			log.Printf("[CLIENT][DEBUG] Before payload write: tunnelConn %p, LocalAddr: %v, RemoteAddr: %v", dst, dst.LocalAddr(), dst.RemoteAddr())
-			tunnelWriteMu.Lock()
-			err = writeFull(dst, buf[:n])
-			tunnelWriteMu.Unlock()
-			log.Printf("[CLIENT][DEBUG] After payload write: tunnelConn %p, LocalAddr: %v, RemoteAddr: %v, err=%v", dst, dst.LocalAddr(), dst.RemoteAddr(), err)
-			if err != nil {
-				log.Printf("[CLIENT] session %08x payload write failed: %v\n", sessID, err)
+			if err = writeFull(dst, buf[:n]); err != nil {
+				tunnelWriteMu.Unlock()
+				log.Printf("[CLIENT] session %08x header+payload write failed: %v", sessID, err)
 				errorCh <- err
 				return
 			}
+			tunnelWriteMu.Unlock()
 			log.Printf("[CLIENT] session %08x wrote header and %d payload bytes to tunnel", sessID, n)
-		}
-	}()
-
-	// Forward dst (tunnel) -> src (SOCKS client)
-	go func() {
-		header := make([]byte, 6)
-		for {
-			_, err := io.ReadFull(dst, header)
-			if err != nil {
-				log.Printf("[CLIENT] session %08x tunnel read error: %v", sessID, err)
-				errorCh <- err
-				return
-			}
-			sessIDRead := binary.BigEndian.Uint32(header[:4])
-			length := binary.BigEndian.Uint16(header[4:6])
-			if sessIDRead != sessID {
-				log.Printf("[CLIENT] session %08x received data for wrong session %08x", sessID, sessIDRead)
-				continue
-			}
-			buf := make([]byte, length)
-			_, err = io.ReadFull(dst, buf)
-			if err != nil {
-				log.Printf("[CLIENT] session %08x tunnel payload read error: %v", sessID, err)
-				errorCh <- err
-				return
-			}
-			log.Printf("[CLIENT] session %08x received %d bytes from tunnel\nPayload:\n%s\n", sessID, length, string(buf))
-			_, err = src.Write(buf)
-			if err != nil {
-				log.Printf("[CLIENT] session %08x write to SOCKS client failed: %v", sessID, err)
-				errorCh <- err
-				return
-			}
-			log.Printf("[CLIENT] session %08x wrote %d bytes to SOCKS client", sessID, length)
 		}
 	}()
 
