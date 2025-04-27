@@ -18,6 +18,9 @@ var socksListenAddr string
 // tunnelListenPort is set by RunClient
 var tunnelListenPort int
 
+// tunnelSecret is used to authenticate and encrypt tunnel connections
+var tunnelSecret string
+
 var (
 	tunnelConn    net.Conn
 	tunnelWriteMu sync.Mutex
@@ -27,10 +30,11 @@ var (
 )
 
 // RunSOCKSFrontend starts the SOCKS proxy client and tunnel listener.
-func RunSOCKSFrontend(socksAddr string, port int) {
+func RunSOCKSFrontend(socksAddr string, port int, secret string) {
 	// configure addresses
 	socksListenAddr = socksAddr
 	tunnelListenPort = port
+	tunnelSecret = secret
 	logger.Info("Listening for tunnel on port %d", tunnelListenPort)
 	go startTunnelListener()
 
@@ -55,22 +59,29 @@ func startTunnelListener() {
 		logger.Fatalf("Tunnel listener failed: %v", err)
 	}
 	for {
-		conn, err := ln.Accept()
+		rawConn, err := ln.Accept()
 		if err != nil {
 			logger.Fatal("Tunnel accept failed:", err)
+		}
+		// secure the tunnel connection
+		secureConn, err := NewSecureServerConn(rawConn, tunnelSecret)
+		if err != nil {
+			logger.Error("Secure handshake failed: %v", err)
+			rawConn.Close()
+			continue
 		}
 		tunnelMu.Lock()
 		if tunnelConn != nil {
 			logger.Info("Closing previous tunnel connection")
 			tunnelConn.Close() // This will cause the old goroutine to exit
 		}
-		tunnelConn = conn
-		if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tunnelConn = secureConn
+		if tcpConn, ok := secureConn.(*net.TCPConn); ok {
 			tcpConn.SetNoDelay(true)
 		}
 		tunnelMu.Unlock()
-		logger.Info("Tunnel connected from %v", conn.RemoteAddr())
-		go handleTunnelReadsClient(conn)
+		logger.Info("Tunnel connected from %v", secureConn.RemoteAddr())
+		go handleTunnelReadsClient(secureConn)
 	}
 }
 

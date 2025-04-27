@@ -21,23 +21,29 @@ var (
 	sessionsMap = make(map[uint32]*session)
 )
 
-// RunTunnelDialer initiates a tunnel connection to the SOCKS frontend.
-func RunTunnelDialer(tunnelAddr string) {
-	tunnel, err := net.Dial("tcp", tunnelAddr)
+// RunTunnelDialer initiates a tunnel connection to the SOCKS frontend with authentication/encryption
+func RunTunnelDialer(tunnelAddr, secret string) {
+	// raw dial
+	rawConn, err := net.Dial("tcp", tunnelAddr)
 	if err != nil {
 		logger.Fatalf("Tunnel connection failed: %v", err)
 	}
-	if tcpConn, ok := tunnel.(*net.TCPConn); ok {
-		err := tcpConn.SetNoDelay(true)
-		if err != nil {
+	// set TCP_NODELAY on raw connection
+	if tcpConn, ok := rawConn.(*net.TCPConn); ok {
+		if err := tcpConn.SetNoDelay(true); err != nil {
 			logger.Info("Failed to set TCP_NODELAY: %v", err)
 		} else {
 			logger.Info("Set TCP_NODELAY on tunnel connection")
 		}
 	}
 	logger.Info("Tunnel connected to laptop")
-	// Only handleTunnelReadsServer reads from the tunnel connection.
-	handleTunnelReadsServer(tunnel)
+	// perform secure handshake
+	secureConn, err := NewSecureClientConn(rawConn, secret)
+	if err != nil {
+		logger.Fatalf("Secure handshake failed: %v", err)
+	}
+	// Only handle reads from the secure tunnel connection
+	handleTunnelReadsServer(secureConn)
 }
 
 func handleTunnelReadsServer(tunnel net.Conn) {

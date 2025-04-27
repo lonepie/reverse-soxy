@@ -22,8 +22,14 @@ func main() {
 	tunnelPort := flag.Int("tunnel-listen-port", 9000, "Tunnel listen port when in SOCKS-frontend (default listener)")
 	dialMode := flag.Bool("dial", false, "Dial tunnel to remote (client mode)")
 	dialAddr := flag.String("dial-addr", "", "Remote tunnel address (peer IP:port) when dialing")
+	secretFlag := flag.String("secret", "", "shared secret for tunnel encryption/authentication")
 	cfgPath := flag.String("config", "", "YAML config file path")
 	flag.Parse()
+
+	// ensure shared secret is provided
+	if *secretFlag == "" {
+		logger.Fatal("Shared secret required: use -secret flag or config")
+	}
 
 	// Optional YAML config override
 	if *cfgPath != "" {
@@ -62,13 +68,13 @@ func main() {
 	logger.Info("Debug logging enabled: %v", *debugFlag)
 
 	// Dispatch
-	logger.Debug("CLI flags: socks-listen-addr=%s, tunnel-listen-port=%d, dial=%v, dial-addr=%s, config=%s", *socksAddr, *tunnelPort, *dialMode, *dialAddr, *cfgPath)
+	logger.Debug("CLI flags: socks-listen-addr=%s, tunnel-listen-port=%d, dial=%v, dial-addr=%s, secret=%s, config=%s", *socksAddr, *tunnelPort, *dialMode, *dialAddr, *secretFlag, *cfgPath)
 	if *dialMode {
 		if *dialAddr == "" {
 			logger.Fatal("Remote tunnel address required in dial mode")
 		}
-		proxy.RunTunnelDialer(*dialAddr)
+		proxy.RunTunnelDialer(*dialAddr, *secretFlag)
 	} else {
-		proxy.RunSOCKSFrontend(*socksAddr, *tunnelPort)
+		proxy.RunSOCKSFrontend(*socksAddr, *tunnelPort, *secretFlag)
 	}
 }
