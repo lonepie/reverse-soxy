@@ -1,5 +1,4 @@
-// client_proxy.go
-package main
+package proxy
 
 import (
 	"encoding/binary"
@@ -10,10 +9,13 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	//"time"
 )
 
-const socksListenAddr = "127.0.0.1:1080"
+// socksListenAddr is set by RunClient
+var socksListenAddr string
+
+// tunnelListenPort is set by RunClient
+var tunnelListenPort int
 
 var (
 	tunnelConn    net.Conn
@@ -23,7 +25,13 @@ var (
 	clientMu      sync.Mutex
 )
 
-func runClient() {
+// RunClient starts the SOCKS proxy client and tunnel listener.
+// socksAddr: address for the SOCKS5 listener (e.g. "127.0.0.1:1080").
+// port: port for tunnel listener (e.g. 9000).
+func RunClient(socksAddr string, port int) {
+	// configure addresses
+	socksListenAddr = socksAddr
+	tunnelListenPort = port
 	log.Println("[CLIENT] Listening for tunnel on port", tunnelListenPort)
 	go startTunnelListener()
 

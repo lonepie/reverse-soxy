@@ -1,5 +1,4 @@
-// server_proxy.go
-package main
+package proxy
 
 import (
 	"encoding/binary"
@@ -21,7 +20,8 @@ var (
 	sessionsMap = make(map[uint32]*session)
 )
 
-func runServer(tunnelAddr string) {
+// RunServer starts the proxy server connecting over the tunnel to the client.
+func RunServer(tunnelAddr string) {
 	tunnel, err := net.Dial("tcp", tunnelAddr)
 	if err != nil {
 		log.Fatal("[SERVER] Tunnel connection failed:", err)
