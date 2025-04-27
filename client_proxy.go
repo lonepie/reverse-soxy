@@ -1,0 +1,341 @@
+// client_proxy.go
+package main
+
+import (
+	"encoding/binary"
+	"fmt"
+	"io"
+	"log"
+	"math/rand"
+	"net"
+	"strconv"
+	"sync"
+	//"time"
+)
+
+const socksListenAddr = "127.0.0.1:1080"
+
+var (
+	tunnelConn    net.Conn
+	tunnelWriteMu sync.Mutex
+	tunnelMu      sync.Mutex
+	clientSess    = make(map[uint32]net.Conn)
+	clientMu      sync.Mutex
+)
+
+func runClient() {
+	log.Println("[CLIENT] Listening for tunnel on port", tunnelListenPort)
+	go startTunnelListener()
+
+	ln, err := net.Listen("tcp", socksListenAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("[CLIENT] SOCKS5 proxy listening on", socksListenAddr)
+	for {
+		client, err := ln.Accept()
+		if err != nil {
+			log.Println("Accept error:", err)
+			continue
+		}
+		go handleSOCKS(client)
+	}
+}
+
+func startTunnelListener() {
+	ln, err := net.Listen("tcp", ":"+strconv.Itoa(tunnelListenPort))
+	if err != nil {
+		log.Fatal(err)
+	}
+	conn, err := ln.Accept()
+	if err != nil {
+		log.Fatal("Tunnel accept failed:", err)
+	}
+	tunnelMu.Lock()
+	tunnelConn = conn
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetNoDelay(true)
+	}
+	tunnelMu.Unlock()
+	log.Println("[CLIENT] Tunnel connected from", conn.RemoteAddr())
+	// Only ONE handleTunnelReadsClient should run per tunnel connection, routing by session ID.
+	go handleTunnelReadsClient(conn)
+}
+
+func handleSOCKS(client net.Conn) {
+	buf := make([]byte, 262)
+	// Step 1: Client greeting
+	n, err := io.ReadAtLeast(client, buf, 2)
+	if err != nil {
+		log.Printf("[CLIENT] SOCKS handshake failed: %v", err)
+		client.Close()
+		return
+	}
+	if buf[0] != 0x05 {
+		log.Printf("[CLIENT] Unsupported SOCKS version: %v", buf[0])
+		client.Close()
+		return
+	}
+	methods := buf[1]
+	if n < int(2+methods) {
+		_, err = io.ReadFull(client, buf[n:2+methods])
+		if err != nil {
+			log.Printf("[CLIENT] SOCKS handshake method read failed: %v", err)
+			client.Close()
+			return
+		}
+	}
+	// Step 2: Server selects 'no auth'
+	_, err = client.Write([]byte{0x05, 0x00})
+	if err != nil {
+		log.Printf("[CLIENT] Failed to write SOCKS5 method selection: %v", err)
+		client.Close()
+		return
+	}
+
+	// Step 3: Client connect request
+	n, err = io.ReadAtLeast(client, buf, 5)
+	if err != nil {
+		log.Printf("[CLIENT] SOCKS connect request failed: %v", err)
+		client.Close()
+		return
+	}
+	if buf[0] != 0x05 || buf[1] != 0x01 {
+		log.Printf("[CLIENT] Only SOCKS5 CONNECT supported")
+		client.Close()
+		return
+	}
+	addrType := buf[3]
+	var target string
+	addrLen := 0
+	switch addrType {
+	case 0x01: // IPv4
+		addrLen = 4
+	case 0x03: // Domain
+		addrLen = int(buf[4]) + 1
+	case 0x04: // IPv6
+		addrLen = 16
+	default:
+		log.Printf("[CLIENT] Unsupported address type: %v", addrType)
+		client.Close()
+		return
+	}
+	// Read the rest of the address/port if not already read
+	reqLen := 4 + addrLen + 2
+	if n < reqLen {
+		_, err = io.ReadFull(client, buf[n:reqLen])
+		if err != nil {
+			log.Printf("[CLIENT] SOCKS connect request addr/port read failed: %v", err)
+			client.Close()
+			return
+		}
+	}
+	// Parse target
+	switch addrType {
+	case 0x01:
+		ip := net.IP(buf[4:8])
+		port := binary.BigEndian.Uint16(buf[8:10])
+		target = fmt.Sprintf("%s:%d", ip.String(), port)
+	case 0x03:
+		hostLen := int(buf[4])
+		host := string(buf[5 : 5+hostLen])
+		port := binary.BigEndian.Uint16(buf[5+hostLen : 7+hostLen])
+		target = fmt.Sprintf("%s:%d", host, port)
+	case 0x04:
+		ip := net.IP(buf[4:20])
+		port := binary.BigEndian.Uint16(buf[20:22])
+		target = fmt.Sprintf("[%s]:%d", ip.String(), port)
+	}
+	log.Printf("[CLIENT] Request to %s", target)
+
+	// Step 4: Send connect reply (success)
+	reply := make([]byte, 10)
+	reply[0] = 0x05 // version
+	reply[1] = 0x00 // success
+	reply[2] = 0x00 // reserved
+	reply[3] = 0x01 // IPv4
+	copy(reply[4:], net.ParseIP("127.0.0.1").To4())
+	binary.BigEndian.PutUint16(reply[8:], 1080) // bound port
+	_, err = client.Write(reply)
+	if err != nil {
+		log.Printf("[CLIENT] Failed to write SOCKS5 connect reply: %v", err)
+		client.Close()
+		return
+	}
+
+	// Only now start session/tunnel forwarding
+	sessID := rand.Uint32()
+	tunnelMu.Lock()
+	tunnelConnGlobal := tunnelConn
+	if tunnelConnGlobal == nil {
+		tunnelMu.Unlock()
+		log.Printf("[CLIENT] No tunnel connection available for session %08x", sessID)
+		client.Close()
+		return
+	}
+	// Send session header and target string to tunnel BEFORE starting forwarding
+	header := make([]byte, 6)
+	binary.BigEndian.PutUint32(header[:4], sessID)
+	binary.BigEndian.PutUint16(header[4:], uint16(len(target)))
+	_, err = tunnelConnGlobal.Write(header)
+	if err != nil {
+		tunnelMu.Unlock()
+		log.Printf("[CLIENT] Failed to write session header: %v", err)
+		client.Close()
+		return
+	}
+	_, err = tunnelConnGlobal.Write([]byte(target))
+	if err != nil {
+		tunnelMu.Unlock()
+		log.Printf("[CLIENT] Failed to write target string: %v", err)
+		client.Close()
+		return
+	}
+	clientMu.Lock()
+	clientSess[sessID] = client
+	clientMu.Unlock()
+	tunnelMu.Unlock()
+	log.Println("[CLIENT] Tunnel connected from", tunnelConnGlobal.RemoteAddr())
+	go forwardClientToTunnel(tunnelConnGlobal, client, sessID)
+}
+
+func writeFull(conn net.Conn, data []byte) error {
+	total := 0
+	for total < len(data) {
+		n, err := conn.Write(data[total:])
+		if err != nil {
+			return err
+		}
+		total += n
+	}
+	return nil
+}
+
+func forwardClientToTunnel(dst net.Conn, src net.Conn, sessID uint32) {
+	buf := make([]byte, 4096)
+	header := make([]byte, 6)
+	binary.BigEndian.PutUint32(header[:4], sessID)
+	log.Printf("[CLIENT][DEBUG] tunnelConn pointer: %p, LocalAddr: %v, RemoteAddr: %v", dst, dst.LocalAddr(), dst.RemoteAddr())
+	errorCh := make(chan error, 2)
+
+	// Forward src (SOCKS client) -> dst (tunnel)
+	go func() {
+		for {
+			log.Printf("[CLIENT] session %08x waiting to read from SOCKS client", sessID)
+			n, err := src.Read(buf)
+			if err != nil {
+				log.Printf("[CLIENT] session %08x closed by client\n", sessID)
+				errorCh <- err
+				return
+			}
+			binary.BigEndian.PutUint16(header[4:], uint16(n))
+			log.Printf("[CLIENT] session %08x preparing to send %d bytes\nPayload:\n%s\n", sessID, n, string(buf[:n]))
+			log.Printf("[CLIENT][DEBUG] Before header write: tunnelConn %p, LocalAddr: %v, RemoteAddr: %v", dst, dst.LocalAddr(), dst.RemoteAddr())
+			tunnelWriteMu.Lock()
+			err = writeFull(dst, header)
+			tunnelWriteMu.Unlock()
+			log.Printf("[CLIENT][DEBUG] After header write: tunnelConn %p, LocalAddr: %v, RemoteAddr: %v, err=%v", dst, dst.LocalAddr(), dst.RemoteAddr(), err)
+			if err != nil {
+				log.Printf("[CLIENT] session %08x header write failed: %v\n", sessID, err)
+				errorCh <- err
+				return
+			}
+			log.Printf("[CLIENT][DEBUG] Before payload write: tunnelConn %p, LocalAddr: %v, RemoteAddr: %v", dst, dst.LocalAddr(), dst.RemoteAddr())
+			tunnelWriteMu.Lock()
+			err = writeFull(dst, buf[:n])
+			tunnelWriteMu.Unlock()
+			log.Printf("[CLIENT][DEBUG] After payload write: tunnelConn %p, LocalAddr: %v, RemoteAddr: %v, err=%v", dst, dst.LocalAddr(), dst.RemoteAddr(), err)
+			if err != nil {
+				log.Printf("[CLIENT] session %08x payload write failed: %v\n", sessID, err)
+				errorCh <- err
+				return
+			}
+			log.Printf("[CLIENT] session %08x wrote header and %d payload bytes to tunnel", sessID, n)
+		}
+	}()
+
+	// Forward dst (tunnel) -> src (SOCKS client)
+	go func() {
+		header := make([]byte, 6)
+		for {
+			_, err := io.ReadFull(dst, header)
+			if err != nil {
+				log.Printf("[CLIENT] session %08x tunnel read error: %v", sessID, err)
+				errorCh <- err
+				return
+			}
+			sessIDRead := binary.BigEndian.Uint32(header[:4])
+			length := binary.BigEndian.Uint16(header[4:6])
+			if sessIDRead != sessID {
+				log.Printf("[CLIENT] session %08x received data for wrong session %08x", sessID, sessIDRead)
+				continue
+			}
+			buf := make([]byte, length)
+			_, err = io.ReadFull(dst, buf)
+			if err != nil {
+				log.Printf("[CLIENT] session %08x tunnel payload read error: %v", sessID, err)
+				errorCh <- err
+				return
+			}
+			log.Printf("[CLIENT] session %08x received %d bytes from tunnel\nPayload:\n%s\n", sessID, length, string(buf))
+			_, err = src.Write(buf)
+			if err != nil {
+				log.Printf("[CLIENT] session %08x write to SOCKS client failed: %v", sessID, err)
+				errorCh <- err
+				return
+			}
+			log.Printf("[CLIENT] session %08x wrote %d bytes to SOCKS client", sessID, length)
+		}
+	}()
+
+	// Wait for either direction to error/close
+	err := <-errorCh
+	log.Printf("[CLIENT] session %08x closing, reason: %v", sessID, err)
+	// Do NOT close the shared tunnel connection here; only close the SOCKS client connection.
+	if src != nil {
+		log.Printf("[CLIENT][DEBUG] Closing SOCKS client %p", src)
+		err := src.Close()
+		if err != nil {
+			log.Printf("[CLIENT][DEBUG] Error closing SOCKS client: %v", err)
+		} else {
+			log.Printf("[CLIENT][DEBUG] SOCKS client closed successfully")
+		}
+	}
+	clientMu.Lock()
+	delete(clientSess, sessID)
+	clientMu.Unlock()
+}
+
+func handleTunnelReadsClient(tunnel net.Conn) {
+	header := make([]byte, 6)
+	for {
+		_, err := io.ReadFull(tunnel, header)
+		if err != nil {
+			log.Println("[CLIENT] Tunnel read error:", err)
+			return
+		}
+		sessID := binary.BigEndian.Uint32(header[:4])
+		length := binary.BigEndian.Uint16(header[4:6])
+		buf := make([]byte, length)
+		_, err = io.ReadFull(tunnel, buf)
+		if err != nil {
+			log.Println("[CLIENT] Payload read error for session", sessID, ":", err)
+			return
+		}
+		clientMu.Lock()
+		client, ok := clientSess[sessID]
+		clientMu.Unlock()
+		if !ok {
+			log.Printf("[CLIENT] Received data for unknown or closed session %08x", sessID)
+			continue
+		}
+		_, err = client.Write(buf)
+		if err != nil {
+			log.Printf("[CLIENT] Write to SOCKS client for session %08x failed: %v", sessID, err)
+			clientMu.Lock()
+			delete(clientSess, sessID)
+			clientMu.Unlock()
+			_ = client.Close()
+		}
+	}
+}
