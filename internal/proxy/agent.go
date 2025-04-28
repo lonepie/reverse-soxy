@@ -65,9 +65,9 @@ func handleTunnelReadsServer(tunnel net.Conn) {
 			return
 		}
 		sessID := binary.BigEndian.Uint32(header[:4])
-		logger.Info("Read header - session ID: %08x", sessID)
+		logger.Debug("Read header - session ID: %08x", sessID)
 		length := binary.BigEndian.Uint16(header[4:6])
-		logger.Info("Expected payload length: %d", length)
+		logger.Debug("Expected payload length: %d", length)
 
 		sessionsMu.Lock()
 		sess, ok := sessionsMap[sessID]
@@ -162,7 +162,7 @@ func handleSession(sessID uint32, sess *session, tunnel net.Conn) {
 	}()
 
 	for data := range sess.incoming {
-		logger.Info("session %08x writing %d bytes to target", sessID, len(data))
+		logger.Debug("session %08x writing %d bytes to target", sessID, len(data))
 		n, err := sess.targetConn.Write(data)
 		if err != nil {
 			logger.Error("session %08x write to target failed: %v", sessID, err)
