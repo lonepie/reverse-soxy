@@ -83,17 +83,21 @@ Dials into the Relay on behalf of the Agent, establishing a secure tunnel via th
 
 ```mermaid
 flowchart LR
-    Agent([Agent]) -- "AES-CTR + HMAC" --> Proxy([Proxy])
-    Proxy -- "SOCKS5" --> Client([Client App])
+    Client([Client App]) <--> Proxy([Proxy]) <--> Agent([Agent]) <--> Remote([Remote Host])
+    Client -- "SOCKS5" --> Proxy
+    Proxy -- "AES-CTR + HMAC" --> Agent
+    Agent -- "TCP" --> Remote
 ```
 
 ### Via Relay
 
 ```mermaid
 flowchart LR
-    Agent([Agent]) -- "AES-CTR + HMAC" --> Relay([Relay Server])
-    Relay -- "AES-CTR + HMAC" --> Proxy([Proxy])
-    Proxy -- "SOCKS5" --> Client([Client App])
+    Client([Client App]) <--> Proxy([Proxy]) <--> Relay([Relay Server]) <--> Agent([Agent]) <--> Remote([Remote Host])
+    Client -- "SOCKS5" --> Proxy
+    Proxy -- "AES-CTR + HMAC" --> Relay
+    Relay -- "AES-CTR + HMAC" --> Agent
+    Agent -- "TCP" --> Remote
 ```
 
 ### Common flags
