@@ -27,6 +27,10 @@ func main() {
 	tunnelAddr := flag.String("tunnel-addr", "", "Tunnel address (IP:port) to dial (agent mode)")
 	secretFlag := flag.String("secret", "", "shared secret for tunnel encryption/authentication")
 	cfgPath := flag.String("config", "", "YAML config file path")
+	modeFlag := flag.String("mode", "", "Component mode: proxy (default), agent, relay")
+	relayListenPort := flag.Int("relay-listen-port", 9000, "Port for both Proxy registrations and Agent tunnels (relay mode)")
+	registerFlag := flag.Bool("register", false, "Proxy registers its availability to Relay server")
+	relayAddr := flag.String("relay-addr", "", "Relay server address (IP:port) for registration or agent dialing")
 	flag.Parse()
 
 	// graceful shutdown on SIGINT/SIGTERM
@@ -78,8 +82,12 @@ func main() {
 
 	// Determine component: AGENT if tunnelAddr given, else PROXY
 	var role string
-	if *tunnelAddr != "" {
+	if *modeFlag != "" {
+		role = *modeFlag
+	} else if *tunnelAddr != "" {
 		role = "AGENT"
+	} else if *registerFlag {
+		role = "REGISTER"
 	} else {
 		role = "PROXY"
 	}
@@ -87,8 +95,17 @@ func main() {
 	logger.Info("Debug logging enabled: %v", *debugFlag)
 
 	// Dispatch
-	logger.Debug("CLI flags: proxy-listen-addr=%s, tunnel-listen-port=%d, tunnel-addr=%s, secret=%s, config=%s", *socksAddr, *tunnelPort, *tunnelAddr, *secretFlag, *cfgPath)
-	if *tunnelAddr != "" {
+	logger.Debug("CLI flags: proxy-listen-addr=%s, tunnel-listen-port=%d, tunnel-addr=%s, secret=%s, config=%s, mode=%s, relay-listen-port=%d, register=%v, relay-addr=%s", *socksAddr, *tunnelPort, *tunnelAddr, *secretFlag, *cfgPath, *modeFlag, *relayListenPort, *registerFlag, *relayAddr)
+	if *modeFlag == "relay" {
+		proxy.RunRelay(*relayListenPort, *secretFlag)
+	} else if *registerFlag {
+		// register with relay and start proxy via relay
+		proxy.RunProxyRelay(*relayAddr, *socksAddr, *secretFlag)
+	} else if *relayAddr != "" {
+		// agent via relay
+		proxy.RunRelayAgent(*relayAddr, *secretFlag)
+	} else if *tunnelAddr != "" {
+		// direct agent
 		proxy.RunAgent(*tunnelAddr, *secretFlag)
 	} else {
 		proxy.RunProxy(*socksAddr, *tunnelPort, *secretFlag)

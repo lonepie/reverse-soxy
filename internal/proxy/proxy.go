@@ -323,3 +323,46 @@ func handleTunnelReadsClient(tunnel net.Conn) {
 		}
 	}
 }
+
+// RunProxyRelay registers with a relay and starts the SOCKS5 front-end using a secure tunnel
+func RunProxyRelay(relayAddr string, socksAddr string, secret string) {
+	logger.Info("Registering with relay %s", relayAddr)
+	rawConn, err := net.Dial("tcp", relayAddr)
+	if err != nil {
+		logger.Fatalf("Register dial failed: %v", err)
+	}
+	defer rawConn.Close()
+	// send REGISTER header (exactly 8 bytes)
+	if _, err := rawConn.Write([]byte("REGISTER")); err != nil {
+		logger.Fatalf("Register header send error: %v", err)
+	}
+	// secure handshake as server
+	secureConn, err := NewSecureServerConn(rawConn, secret)
+	if err != nil {
+		logger.Fatalf("Secure handshake failed: %v", err)
+	}
+	// set tunnel connection and start reader for agent replies
+	tunnelMu.Lock()
+	if tunnelConn != nil {
+		tunnelConn.Close()
+	}
+	tunnelConn = secureConn
+	tunnelMu.Unlock()
+	// start reading from tunnel and forwarding to SOCKS clients
+	go handleTunnelReadsClient(secureConn)
+	logger.Info("Tunnel via relay established")
+	// start SOCKS5 proxy
+	ln, err := net.Listen("tcp", socksAddr)
+	if err != nil {
+		logger.Fatalf("SOCKS5 listen failed: %v", err)
+	}
+	logger.Info("SOCKS5 proxy listening on %s", socksAddr)
+	for {
+		client, err := ln.Accept()
+		if err != nil {
+			logger.Println("Accept error:", err)
+			continue
+		}
+		go handleSOCKS(client)
+	}
+}

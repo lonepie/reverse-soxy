@@ -76,7 +76,6 @@ func NewSecureServerConn(conn net.Conn, secret string) (net.Conn, error) {
 	// read HMAC handshake
 	expectedMacLen := sha256.Size
 	bufMac := make([]byte, expectedMacLen)
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := io.ReadFull(conn, bufMac); err != nil {
 		return nil, err
 	}
@@ -94,8 +93,6 @@ func NewSecureServerConn(conn net.Conn, secret string) (net.Conn, error) {
 	if _, err := io.ReadFull(conn, ivDec); err != nil {
 		return nil, err
 	}
-	// clear deadline after handshake
-	conn.SetReadDeadline(time.Time{})
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
