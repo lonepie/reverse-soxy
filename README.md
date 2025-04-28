@@ -30,6 +30,40 @@ Starts the SOCKS5 proxy front-end and listens for agent connections.
   --secret mySharedSecret
 ```
 
+### Relay mode
+
+Starts a public relay server on a VPS. Useful when the Proxy cannot expose a public port.
+
+```bash
+./reverse-soxy \
+  --mode relay \
+  --relay-listen-port 9000 \
+  --secret mySharedSecret
+```
+
+### Proxy via Relay
+
+Registers a Proxy behind NAT with the Relay, then starts the SOCKS5 front-end.
+
+```bash
+./reverse-soxy \
+  --mode proxy \
+  --register \
+  --relay-addr vps.example.com:9000 \
+  --secret mySharedSecret
+```
+
+### Agent via Relay
+
+Dials into the Relay on behalf of the Agent, establishing a secure tunnel via the VPS.
+
+```bash
+./reverse-soxy \
+  --mode agent \
+  --relay-addr vps.example.com:9000 \
+  --secret mySharedSecret
+```
+
 ### Agent mode
 
 Dials into the proxy over the encrypted tunnel.
@@ -50,6 +84,10 @@ Dials into the proxy over the encrypted tunnel.
 | `--secret`            | Shared secret for HMAC/AES handshake (required).             |
 | `--config`            | Path to YAML config file (optional).                         |
 | `--debug`             | Enable debug-level logging.                                   |
+| `--mode`              | Component mode: `proxy` (default), `agent`, or `relay`.       |
+| `--relay-listen-port` | Port for proxy registrations and agent tunnels (relay mode).  |
+| `--relay-addr`        | Relay server address for registration or agent dialing.       |
+| `--register`          | In proxy mode, register the proxy with the relay.            |
 
 ## Configuration file (YAML)
 

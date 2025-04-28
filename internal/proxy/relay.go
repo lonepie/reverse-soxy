@@ -70,8 +70,44 @@ func handleAgent(conn net.Conn) {
     proxyConn := registry[0]
     registry = registry[1:]
     regMu.Unlock()
-    go io.Copy(proxyConn, conn)
-    io.Copy(conn, proxyConn)
+    // copy from agent to proxy with debug logging
+    go func() {
+        buf := make([]byte, 4096)
+        for {
+            n, err := conn.Read(buf)
+            if n > 0 {
+                logger.Debug("Relay agent->proxy payload: %x", buf[:n])
+                if _, werr := proxyConn.Write(buf[:n]); werr != nil {
+                    logger.Error("Relay write agent->proxy error: %v", werr)
+                    return
+                }
+            }
+            if err != nil {
+                if err != io.EOF {
+                    logger.Error("Relay agent->proxy read error: %v", err)
+                }
+                return
+            }
+        }
+    }()
+    // copy from proxy to agent with debug logging
+    buf := make([]byte, 4096)
+    for {
+        n, err := proxyConn.Read(buf)
+        if n > 0 {
+            logger.Debug("Relay proxy->agent payload: %x", buf[:n])
+            if _, werr := conn.Write(buf[:n]); werr != nil {
+                logger.Error("Relay write proxy->agent error: %v", werr)
+                return
+            }
+        }
+        if err != nil {
+            if err != io.EOF {
+                logger.Error("Relay proxy->agent read error: %v", err)
+            }
+            return
+        }
+    }
 }
 
 // RunRegister connects to a relay server and registers as a proxy.
