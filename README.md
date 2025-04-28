@@ -1,11 +1,14 @@
 # Reverse-SOXY
 
-A minimal, encrypted SOCKS5 tunnel for securely forwarding traffic between a **Proxy** and an **Agent**. Uses AES-CTR + HMAC to authenticate and encrypt the tunnel, plus SOCKS5 on the Proxy side.
+A minimal, encrypted SOCKS5 tunnel for securely forwarding traffic between a **Proxy** and an **Agent** (optionally using a **Relay** server). Uses AES-CTR + HMAC to authenticate and encrypt the tunnel, plus SOCKS5 on the Proxy side.
 
 ## Features
 
 - **Proxy mode**: exposes a local SOCKS5 endpoint and listens for agent connections on a tunnel port.
 - **Agent mode**: dials into the proxy over a secure, authenticated, AES-CTR tunnel.
+- **Relay mode**: starts a relay server. Useful when the Proxy cannot expose a public port.
+- **Proxy via Relay**: registers a Proxy behind NAT with the Relay, then starts the SOCKS5 front-end.
+- **Agent via Relay**: dials into the Relay on behalf of the Agent, establishing a secure tunnel via the relay.
 - Graceful shutdown (SIGINT/SIGTERM) and automatic reconnect/backoff.
 - Simple YAML configuration override.
 - Zero external dependencies beyond the Go standard library and `gopkg.in/yaml.v3`.
@@ -27,6 +30,16 @@ Starts the SOCKS5 proxy front-end and listens for agent connections.
 ./reverse-soxy \
   --proxy-listen-addr 127.0.0.1:1080 \
   --tunnel-listen-port 9000 \
+  --secret mySharedSecret
+```
+
+### Agent mode
+
+Dials into the proxy over the encrypted tunnel.
+
+```bash
+./reverse-soxy \
+  --tunnel-addr proxy.host:9000 \
   --secret mySharedSecret
 ```
 
@@ -61,16 +74,6 @@ Dials into the Relay on behalf of the Agent, establishing a secure tunnel via th
 ./reverse-soxy \
   --mode agent \
   --relay-addr vps.example.com:9000 \
-  --secret mySharedSecret
-```
-
-### Agent mode
-
-Dials into the proxy over the encrypted tunnel.
-
-```bash
-./reverse-soxy \
-  --tunnel-addr proxy.host:9000 \
   --secret mySharedSecret
 ```
 
