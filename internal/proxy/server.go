@@ -23,27 +23,35 @@ var (
 
 // RunTunnelDialer initiates a tunnel connection to the SOCKS frontend with authentication/encryption
 func RunTunnelDialer(tunnelAddr, secret string) {
-	// raw dial
-	rawConn, err := net.Dial("tcp", tunnelAddr)
-	if err != nil {
-		logger.Fatalf("Tunnel connection failed: %v", err)
-	}
-	// set TCP_NODELAY on raw connection
-	if tcpConn, ok := rawConn.(*net.TCPConn); ok {
-		if err := tcpConn.SetNoDelay(true); err != nil {
-			logger.Info("Failed to set TCP_NODELAY: %v", err)
-		} else {
-			logger.Info("Set TCP_NODELAY on tunnel connection")
+	// continuously dial and maintain tunnel
+	for {
+		rawConn, err := net.Dial("tcp", tunnelAddr)
+		if err != nil {
+			logger.Error("Tunnel connection failed: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
 		}
+		// TCP optimizations
+		if tcpConn, ok := rawConn.(*net.TCPConn); ok {
+			tcpConn.SetNoDelay(true)
+			tcpConn.SetKeepAlive(true)
+			tcpConn.SetKeepAlivePeriod(30 * time.Second)
+		}
+		// secure handshake
+		secureConn, err := NewSecureClientConn(rawConn, secret)
+		if err != nil {
+			logger.Error("Secure handshake failed: %v", err)
+			rawConn.Close()
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		logger.Info("Tunnel connected to laptop")
+		// handle tunnel reads until error
+		handleTunnelReadsServer(secureConn)
+		logger.Info("Tunnel disconnected, retrying in 5s")
+		secureConn.Close()
+		time.Sleep(5 * time.Second)
 	}
-	logger.Info("Tunnel connected to laptop")
-	// perform secure handshake
-	secureConn, err := NewSecureClientConn(rawConn, secret)
-	if err != nil {
-		logger.Fatalf("Secure handshake failed: %v", err)
-	}
-	// Only handle reads from the secure tunnel connection
-	handleTunnelReadsServer(secureConn)
 }
 
 func handleTunnelReadsServer(tunnel net.Conn) {

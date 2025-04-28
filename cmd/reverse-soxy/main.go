@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"math/rand"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/lonepie/reverse-soxy/internal/logger"
@@ -25,6 +28,15 @@ func main() {
 	secretFlag := flag.String("secret", "", "shared secret for tunnel encryption/authentication")
 	cfgPath := flag.String("config", "", "YAML config file path")
 	flag.Parse()
+
+	// graceful shutdown on SIGINT/SIGTERM
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		logger.Info("Shutdown signal received, exiting")
+		os.Exit(0)
+	}()
 
 	// ensure shared secret is provided
 	if *secretFlag == "" {
