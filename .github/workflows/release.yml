@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: '1.20'
+
+      - name: Install dependencies
+        run: go mod tidy
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          GOOS=linux   GOARCH=amd64 go build -o dist/reverse-soxy-linux-amd64 ./cmd/reverse-soxy
+          GOOS=linux   GOARCH=arm64 go build -o dist/reverse-soxy-linux-arm64 ./cmd/reverse-soxy
+          GOOS=darwin  GOARCH=amd64 go build -o dist/reverse-soxy-darwin-amd64 ./cmd/reverse-soxy
+          GOOS=darwin  GOARCH=arm64 go build -o dist/reverse-soxy-darwin-arm64 ./cmd/reverse-soxy
+          GOOS=windows GOARCH=amd64 go build -o dist/reverse-soxy-windows-amd64.exe ./cmd/reverse-soxy
+          GOOS=windows GOARCH=arm64 go build -o dist/reverse-soxy-windows-arm64.exe ./cmd/reverse-soxy
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
