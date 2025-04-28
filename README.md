@@ -11,7 +11,6 @@ A minimal, encrypted SOCKS5 tunnel for securely forwarding traffic between a **P
 - **Agent via Relay**: dials into the Relay on behalf of the Agent, establishing a secure tunnel via the relay.
 - Graceful shutdown (SIGINT/SIGTERM) and automatic reconnect/backoff.
 - Simple YAML configuration override.
-- Zero external dependencies beyond the Go standard library and `gopkg.in/yaml.v3`.
 
 ## Installation
 
