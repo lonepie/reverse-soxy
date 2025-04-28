@@ -100,5 +100,11 @@ func NewSecureServerConn(conn net.Conn, secret string) (net.Conn, error) {
 	// create independent CTR streams: decrypt client->server using ivEnc, encrypt server->client using ivDec
 	dec := cipher.NewCTR(block, ivEnc)
 	enc := cipher.NewCTR(block, ivDec)
+	// disable Nagle on underlying TCP
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetNoDelay(true)
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
 	return &secureConn{Conn: conn, r: cipher.StreamReader{S: dec, R: conn}, w: cipher.StreamWriter{S: enc, W: conn}}, nil
 }
