@@ -77,6 +77,25 @@ Dials into the Relay on behalf of the Agent, establishing a secure tunnel via th
   --secret mySharedSecret
 ```
 
+## Connection Flows
+
+### Direct Proxy <--> Agent
+
+```mermaid
+flowchart LR
+    Agent([Agent]) -- "AES-CTR + HMAC" --> Proxy([Proxy])
+    Proxy -- "SOCKS5" --> Client([Client App])
+```
+
+### Via Relay
+
+```mermaid
+flowchart LR
+    Agent([Agent]) -- "AES-CTR + HMAC" --> Relay([Relay Server])
+    Relay -- "AES-CTR + HMAC" --> Proxy([Proxy])
+    Proxy -- "SOCKS5" --> Client([Client App])
+```
+
 ### Common flags
 
 | Flag                  | Description                                                   |
