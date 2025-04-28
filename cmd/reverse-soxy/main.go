@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"math/rand"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,9 +22,9 @@ func main() {
 	debugFlag := flag.Bool("debug", false, "enable debug logging")
 
 	// CLI flags
-	socksAddr := flag.String("proxy-listen-addr", "127.0.0.1:1080", "SOCKS5 listen address (used if agent-addr is empty)")
+	socksAddr := flag.String("proxy-listen-addr", "127.0.0.1:1080", "SOCKS5 listen address")
 	tunnelPort := flag.Int("tunnel-listen-port", 9000, "Tunnel listen port when in proxy mode")
-	agentAddr := flag.String("agent-addr", "", "Proxy address (IP:port) to dial (agent mode)")
+	tunnelAddr := flag.String("tunnel-addr", "", "Tunnel address (IP:port) to dial (agent mode)")
 	secretFlag := flag.String("secret", "", "shared secret for tunnel encryption/authentication")
 	cfgPath := flag.String("config", "", "YAML config file path")
 	flag.Parse()
@@ -63,14 +64,21 @@ func main() {
 			*tunnelPort = cfg.TunnelListenPort
 		}
 		if cfg.TunnelAddr != "" {
-			*agentAddr = cfg.TunnelAddr
+			*tunnelAddr = cfg.TunnelAddr
 		}
 		logger.Debug("Loaded config from %s: socks_listen_addr=%s, tunnel_listen_port=%d, tunnel_addr=%s", *cfgPath, cfg.SocksListenAddr, cfg.TunnelListenPort, cfg.TunnelAddr)
 	}
 
-	// Determine component: AGENT if agentAddr given, else PROXY
+	// validate tunnelAddr if provided
+	if *tunnelAddr != "" {
+		if _, _, err := net.SplitHostPort(*tunnelAddr); err != nil {
+			logger.Fatalf("Invalid tunnel-addr: %v", err)
+		}
+	}
+
+	// Determine component: AGENT if tunnelAddr given, else PROXY
 	var role string
-	if *agentAddr != "" {
+	if *tunnelAddr != "" {
 		role = "AGENT"
 	} else {
 		role = "PROXY"
@@ -79,9 +87,9 @@ func main() {
 	logger.Info("Debug logging enabled: %v", *debugFlag)
 
 	// Dispatch
-	logger.Debug("CLI flags: proxy-listen-addr=%s, tunnel-listen-port=%d, agent-addr=%s, secret=%s, config=%s", *socksAddr, *tunnelPort, *agentAddr, *secretFlag, *cfgPath)
-	if *agentAddr != "" {
-		proxy.RunAgent(*agentAddr, *secretFlag)
+	logger.Debug("CLI flags: proxy-listen-addr=%s, tunnel-listen-port=%d, tunnel-addr=%s, secret=%s, config=%s", *socksAddr, *tunnelPort, *tunnelAddr, *secretFlag, *cfgPath)
+	if *tunnelAddr != "" {
+		proxy.RunAgent(*tunnelAddr, *secretFlag)
 	} else {
 		proxy.RunProxy(*socksAddr, *tunnelPort, *secretFlag)
 	}
