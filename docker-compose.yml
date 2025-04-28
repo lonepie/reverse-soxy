@@ -1,0 +1,74 @@
+version: '3'
+
+services:
+  # Proxy mode service
+  proxy:
+    build: .
+    ports:
+      - "1080:1080"  # SOCKS5 proxy port
+      - "9000:9000"  # Tunnel listen port
+    environment:
+      - SECRET=changeme  # Change this to a secure secret
+    command: >
+      --proxy-listen-addr 0.0.0.0:1080
+      --tunnel-listen-port 9000
+      --secret ${SECRET:-changeme}
+      --debug
+
+  # Agent mode service
+  agent:
+    build: .
+    environment:
+      - SECRET=changeme  # Change this to a secure secret
+      - PROXY_HOST=proxy  # Change this to your proxy host if not using docker-compose networking
+    command: >
+      --tunnel-addr ${PROXY_HOST:-proxy}:9000
+      --secret ${SECRET:-changeme}
+      --debug
+    depends_on:
+      - proxy
+
+  # Relay mode service
+  relay:
+    build: .
+    ports:
+      - "9000:9000"  # Relay listen port
+    environment:
+      - SECRET=changeme  # Change this to a secure secret
+    command: >
+      --mode relay
+      --relay-listen-port 9000
+      --secret ${SECRET:-changeme}
+      --debug
+
+  # Proxy via Relay mode service
+  proxy-via-relay:
+    build: .
+    ports:
+      - "1080:1080"  # SOCKS5 proxy port
+    environment:
+      - SECRET=changeme  # Change this to a secure secret
+      - RELAY_HOST=relay  # Change this to your relay host if not using docker-compose networking
+    command: >
+      --mode proxy
+      --register
+      --relay-addr ${RELAY_HOST:-relay}:9000
+      --proxy-listen-addr 0.0.0.0:1080
+      --secret ${SECRET:-changeme}
+      --debug
+    depends_on:
+      - relay
+
+  # Agent via Relay mode service
+  agent-via-relay:
+    build: .
+    environment:
+      - SECRET=changeme  # Change this to a secure secret
+      - RELAY_HOST=relay  # Change this to your relay host if not using docker-compose networking
+    command: >
+      --mode agent
+      --relay-addr ${RELAY_HOST:-relay}:9000
+      --secret ${SECRET:-changeme}
+      --debug
+    depends_on:
+      - relay
