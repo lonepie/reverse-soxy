@@ -29,10 +29,10 @@ var (
 	clientMu      sync.Mutex
 )
 
-// RunSOCKSFrontend starts the SOCKS proxy client and tunnel listener.
-func RunSOCKSFrontend(socksAddr string, port int, secret string) {
+// RunProxy starts the SOCKS5 proxy frontend and tunnel listener.
+func RunProxy(proxyAddr string, port int, secret string) {
 	// configure addresses
-	socksListenAddr = socksAddr
+	socksListenAddr = proxyAddr
 	tunnelListenPort = port
 	tunnelSecret = secret
 	logger.Info("Listening for tunnel on port %d", tunnelListenPort)

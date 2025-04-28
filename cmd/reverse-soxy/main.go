@@ -21,10 +21,9 @@ func main() {
 	debugFlag := flag.Bool("debug", false, "enable debug logging")
 
 	// CLI flags
-	socksAddr := flag.String("socks-listen-addr", "127.0.0.1:1080", "SOCKS5 listen address")
-	tunnelPort := flag.Int("tunnel-listen-port", 9000, "Tunnel listen port when in SOCKS-frontend (default listener)")
-	dialMode := flag.Bool("dial", false, "Dial tunnel to remote (client mode)")
-	dialAddr := flag.String("dial-addr", "", "Remote tunnel address (peer IP:port) when dialing")
+	socksAddr := flag.String("proxy-listen-addr", "127.0.0.1:1080", "SOCKS5 listen address (used if agent-addr is empty)")
+	tunnelPort := flag.Int("tunnel-listen-port", 9000, "Tunnel listen port when in proxy mode")
+	agentAddr := flag.String("agent-addr", "", "Proxy address (IP:port) to dial (agent mode)")
 	secretFlag := flag.String("secret", "", "shared secret for tunnel encryption/authentication")
 	cfgPath := flag.String("config", "", "YAML config file path")
 	flag.Parse()
@@ -64,29 +63,26 @@ func main() {
 			*tunnelPort = cfg.TunnelListenPort
 		}
 		if cfg.TunnelAddr != "" {
-			*dialAddr = cfg.TunnelAddr
+			*agentAddr = cfg.TunnelAddr
 		}
 		logger.Debug("Loaded config from %s: socks_listen_addr=%s, tunnel_listen_port=%d, tunnel_addr=%s", *cfgPath, cfg.SocksListenAddr, cfg.TunnelListenPort, cfg.TunnelAddr)
 	}
 
-	// Determine component (CLIENT or SERVER)
-	role := "CLIENT"
-	if *dialMode {
-		role = "CLIENT"
+	// Determine component: AGENT if agentAddr given, else PROXY
+	var role string
+	if *agentAddr != "" {
+		role = "AGENT"
 	} else {
-		role = "SERVER"
+		role = "PROXY"
 	}
 	logger.Init(*debugFlag, role)
 	logger.Info("Debug logging enabled: %v", *debugFlag)
 
 	// Dispatch
-	logger.Debug("CLI flags: socks-listen-addr=%s, tunnel-listen-port=%d, dial=%v, dial-addr=%s, secret=%s, config=%s", *socksAddr, *tunnelPort, *dialMode, *dialAddr, *secretFlag, *cfgPath)
-	if *dialMode {
-		if *dialAddr == "" {
-			logger.Fatal("Remote tunnel address required in dial mode")
-		}
-		proxy.RunTunnelDialer(*dialAddr, *secretFlag)
+	logger.Debug("CLI flags: proxy-listen-addr=%s, tunnel-listen-port=%d, agent-addr=%s, secret=%s, config=%s", *socksAddr, *tunnelPort, *agentAddr, *secretFlag, *cfgPath)
+	if *agentAddr != "" {
+		proxy.RunAgent(*agentAddr, *secretFlag)
 	} else {
-		proxy.RunSOCKSFrontend(*socksAddr, *tunnelPort, *secretFlag)
+		proxy.RunProxy(*socksAddr, *tunnelPort, *secretFlag)
 	}
 }

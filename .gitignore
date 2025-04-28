@@ -1,0 +1,6 @@
+# ignore build outputs
+/build/
+
+# ignore backup files
+*.bak
+go.sum

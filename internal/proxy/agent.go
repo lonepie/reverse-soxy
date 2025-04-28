@@ -21,13 +21,13 @@ var (
 	sessionsMap = make(map[uint32]*session)
 )
 
-// RunTunnelDialer initiates a tunnel connection to the SOCKS frontend with authentication/encryption
-func RunTunnelDialer(tunnelAddr, secret string) {
+// RunAgent initiates a secure connection to the proxy with authentication/encryption
+func RunAgent(proxyAddr, secret string) {
 	// continuously dial and maintain tunnel
 	for {
-		rawConn, err := net.Dial("tcp", tunnelAddr)
+		rawConn, err := net.Dial("tcp", proxyAddr)
 		if err != nil {
-			logger.Error("Tunnel connection failed: %v", err)
+			logger.Error("Agent connection failed: %v", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -45,10 +45,10 @@ func RunTunnelDialer(tunnelAddr, secret string) {
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		logger.Info("Tunnel connected to laptop")
+		logger.Info("Agent connected to laptop")
 		// handle tunnel reads until error
 		handleTunnelReadsServer(secureConn)
-		logger.Info("Tunnel disconnected, retrying in 5s")
+		logger.Info("Agent disconnected, retrying in 5s")
 		secureConn.Close()
 		time.Sleep(5 * time.Second)
 	}
