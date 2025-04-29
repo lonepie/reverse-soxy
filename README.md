@@ -12,11 +12,38 @@ A minimal, encrypted SOCKS5 tunnel for securely forwarding traffic between a **P
 - Graceful shutdown (SIGINT/SIGTERM) and automatic reconnect/backoff.
 - Simple YAML configuration override.
 
-## Installation
+## Releases
+
+Packages can be downloaded from the [releases](https://github.com/lonepie/reverse-soxy/releases) page.
+
+## Docker
+
+For instructions on building and running the application in Docker, see [README.docker.md](README.docker.md).
+
+## Building
+
+To build the project, you can use either Go or Make. Follow the instructions below:
+
+### Using Go
 
 ```bash
+# Clone the repository
+git clone https://github.com/lonepie/reverse-soxy.git
+cd reverse-soxy
+
 # Go 1.20+
 go build -o build/reverse-soxy ./cmd/reverse-soxy
+```
+
+### Using Make
+
+```bash
+# Clone the repository
+git clone https://github.com/lonepie/reverse-soxy.git
+cd reverse-soxy
+
+# Build using Make
+make
 ```
 
 ## Usage

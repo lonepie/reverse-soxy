@@ -3,12 +3,32 @@
 APP_NAME := reverse-soxy
 BUILD_DIR := build
 
-.PHONY: all clean linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64 windows_arm64
+.PHONY: all clean linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64 windows_arm64 detect_os_arch
 
-all: linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64 windows_arm64
+all: detect_os_arch
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+detect_os_arch:
+	@echo "Detecting OS and architecture..."
+	@OS_TYPE=$$(uname -s | tr '[:upper:]' '[:lower:]') && \
+	ARCH_TYPE=$$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
+	case "$$OS_TYPE" in \
+		linux*) \
+			case "$$ARCH_TYPE" in \
+				amd64) $(MAKE) linux_amd64 ;; \
+				arm64) $(MAKE) linux_arm64 ;; \
+				*) echo "Unsupported architecture: $$ARCH_TYPE"; exit 1 ;; \
+			esac ;; \
+		darwin*) \
+			case "$$ARCH_TYPE" in \
+				amd64) $(MAKE) darwin_amd64 ;; \
+				arm64) $(MAKE) darwin_arm64 ;; \
+				*) echo "Unsupported architecture: $$ARCH_TYPE"; exit 1 ;; \
+			esac ;; \
+		*) echo "Unsupported OS: $$OS_TYPE"; exit 1 ;; \
+	esac
 
 linux_amd64: | $(BUILD_DIR)
 	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64 ./cmd/reverse-soxy

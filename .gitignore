@@ -3,3 +3,9 @@
 
 # ignore backup files
 *.bak
+
+# ignore vscode workspace files
+.vscode/
+
+# ignore test files 
+*_test.go
