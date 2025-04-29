@@ -31,10 +31,27 @@ jobs:
           GOOS=windows GOARCH=amd64 go build -o dist/reverse-soxy-windows-amd64.exe ./cmd/reverse-soxy
           GOOS=windows GOARCH=arm64 go build -o dist/reverse-soxy-windows-arm64.exe ./cmd/reverse-soxy
 
+      - name: Zip binaries
+        run: |
+          cd dist
+          zip reverse-soxy-linux-amd64.zip reverse-soxy-linux-amd64
+          zip reverse-soxy-linux-arm64.zip reverse-soxy-linux-arm64
+          zip reverse-soxy-darwin-amd64.zip reverse-soxy-darwin-amd64
+          zip reverse-soxy-darwin-arm64.zip reverse-soxy-darwin-arm64
+          zip reverse-soxy-windows-amd64.zip reverse-soxy-windows-amd64.exe
+          zip reverse-soxy-windows-arm64.zip reverse-soxy-windows-arm64.exe
+
+      - name: Generate checksum file
+        run: |
+          cd dist
+          sha256sum *.zip > checksums
+
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/*
+          files: |
+            dist/*.zip
+            dist/checksums
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -21,16 +21,82 @@ var (
 	sessionsMap = make(map[uint32]*session)
 )
 
-// RunAgent initiates a secure connection to the proxy with authentication/encryption
-func RunAgent(proxyAddr, secret string) {
-	// continuously dial and maintain tunnel
+// DefaultMaxRetries is the default number of times to retry connecting before giving up
+const DefaultMaxRetries = 10
+
+// RunAgentRelay connects to the proxy via a relay server
+func RunAgentRelay(relayAddr, secret string, maxRetries int) {
+	// Use default value if maxRetries is not positive
+	if maxRetries <= 0 {
+		maxRetries = DefaultMaxRetries
+	}
+
+	retryCount := 0
+
 	for {
-		rawConn, err := net.Dial("tcp", proxyAddr)
+		rawConn, err := net.Dial("tcp", relayAddr)
 		if err != nil {
-			logger.Error("Agent connection failed: %v", err)
+			retryCount++
+			logger.Error("AgentRelay dial failed: %v (attempt %d/%d)", err, retryCount, maxRetries)
+			if retryCount >= maxRetries {
+				logger.Info("Maximum retry attempts (%d) reached, exiting", maxRetries)
+				return
+			}
 			time.Sleep(5 * time.Second)
 			continue
 		}
+		// send fixed 8-byte header
+		hdr := []byte("AGENT   ")
+		if _, err := rawConn.Write(hdr); err != nil {
+			rawConn.Close()
+			logger.Error("AgentRelay header send error: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		// secure handshake
+		secureConn, err := NewSecureClientConn(rawConn, secret)
+		if err != nil {
+			logger.Error("AgentRelay handshake failed: %v", err)
+			rawConn.Close()
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		logger.Info("Agent connected via relay %s", relayAddr)
+		// handle tunnel until error
+		handleTunnelReadsServer(secureConn)
+		secureConn.Close()
+		time.Sleep(5 * time.Second)
+	}
+}
+
+// RunAgent initiates a direct secure connection to the proxy with authentication/encryption
+// If maxRetries <= 0, it will use DefaultMaxRetries
+func RunAgent(proxyAddr, secret string, maxRetries int) {
+	// Use default value if maxRetries is not positive
+	if maxRetries <= 0 {
+		maxRetries = DefaultMaxRetries
+	}
+
+	retryCount := 0
+
+	// continuously dial and maintain tunnel
+	for retryCount < maxRetries {
+		rawConn, err := net.Dial("tcp", proxyAddr)
+		if err != nil {
+			retryCount++
+			logger.Error("Agent connection failed: %v (attempt %d/%d)", err, retryCount, maxRetries)
+
+			if retryCount >= maxRetries {
+				logger.Info("Maximum retry attempts (%d) reached, exiting", maxRetries)
+				return
+			}
+
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		// Reset retry counter on successful connection
+		retryCount = 0
 		// TCP optimizations
 		if tcpConn, ok := rawConn.(*net.TCPConn); ok {
 			tcpConn.SetNoDelay(true)
@@ -51,6 +117,15 @@ func RunAgent(proxyAddr, secret string) {
 		logger.Info("Agent disconnected, retrying in 5s")
 		secureConn.Close()
 		time.Sleep(5 * time.Second)
+
+		// Increment retry counter for disconnection
+		retryCount++
+		logger.Info("Reconnection attempt %d/%d", retryCount, maxRetries)
+
+		if retryCount >= maxRetries {
+			logger.Info("Maximum retry attempts (%d) reached, exiting", maxRetries)
+			return
+		}
 	}
 }
 

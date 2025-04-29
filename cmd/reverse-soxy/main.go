@@ -29,6 +29,7 @@ func main() {
 	cfgPath := flag.String("config", "", "YAML config file path")
 	modeFlag := flag.String("mode", "", "Component mode: proxy (default), agent, relay")
 	relayListenPort := flag.Int("relay-listen-port", 9000, "Port for both Proxy registrations and Agent tunnels (relay mode)")
+	retryFlag := flag.Int("retry", 10, "Maximum number of retries")
 	registerFlag := flag.Bool("register", false, "Proxy registers its availability to Relay server")
 	relayAddr := flag.String("relay-addr", "", "Relay server address (IP:port) for registration or agent dialing")
 	flag.Parse()
@@ -42,11 +43,6 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// ensure shared secret is provided
-	if *secretFlag == "" {
-		logger.Fatal("Shared secret required: use -secret flag or config")
-	}
-
 	// Optional YAML config override
 	if *cfgPath != "" {
 		data, err := os.ReadFile(*cfgPath)
@@ -57,20 +53,52 @@ func main() {
 			SocksListenAddr  string `yaml:"socks_listen_addr"`
 			TunnelListenPort int    `yaml:"tunnel_listen_port"`
 			TunnelAddr       string `yaml:"tunnel_addr"`
+			MaxRetries       int    `yaml:"max_retries"`
+			Secret           string `yaml:"secret"`
+			RelayListenPort  int    `yaml:"relay_listen_port"`
+			RelayAddr        string `yaml:"relay_addr"`
 		}
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			logger.Fatalf("Failed to parse config: %v", err)
 		}
-		if cfg.SocksListenAddr != "" {
+
+		// Apply config values only if CLI flags are at their defaults
+		if *socksAddr == "127.0.0.1:1080" && cfg.SocksListenAddr != "" {
 			*socksAddr = cfg.SocksListenAddr
 		}
-		if cfg.TunnelListenPort != 0 {
+		if *tunnelPort == 9000 && cfg.TunnelListenPort != 0 {
 			*tunnelPort = cfg.TunnelListenPort
 		}
-		if cfg.TunnelAddr != "" {
+		if *tunnelAddr == "" && cfg.TunnelAddr != "" {
 			*tunnelAddr = cfg.TunnelAddr
 		}
-		logger.Debug("Loaded config from %s: socks_listen_addr=%s, tunnel_listen_port=%d, tunnel_addr=%s", *cfgPath, cfg.SocksListenAddr, cfg.TunnelListenPort, cfg.TunnelAddr)
+		if *secretFlag == "" && cfg.Secret != "" {
+			*secretFlag = cfg.Secret
+		}
+		if *relayListenPort == 9000 && cfg.RelayListenPort != 0 {
+			*relayListenPort = cfg.RelayListenPort
+		}
+		if *relayAddr == "" && cfg.RelayAddr != "" {
+			*relayAddr = cfg.RelayAddr
+		}
+		if *retryFlag == 10 && cfg.MaxRetries != 0 {
+			*retryFlag = cfg.MaxRetries
+		}
+
+		logger.Debug("Loaded config from %s: socks_listen_addr=%s, tunnel_listen_port=%d, tunnel_addr=%s, secret=%s, relay_listen_port=%d, relay_addr=%s, max_retries=%d",
+			*cfgPath,
+			cfg.SocksListenAddr,
+			cfg.TunnelListenPort,
+			cfg.TunnelAddr,
+			cfg.Secret,
+			cfg.RelayListenPort,
+			cfg.RelayAddr,
+			cfg.MaxRetries)
+	}
+
+	// ensure shared secret is provided
+	if *secretFlag == "" {
+		logger.Fatal("Shared secret required: use -secret flag or config")
 	}
 
 	// validate tunnelAddr if provided
@@ -103,10 +131,10 @@ func main() {
 		proxy.RunProxyRelay(*relayAddr, *socksAddr, *secretFlag)
 	} else if *relayAddr != "" {
 		// agent via relay
-		proxy.RunRelayAgent(*relayAddr, *secretFlag)
+		proxy.RunAgentRelay(*relayAddr, *secretFlag, *retryFlag)
 	} else if *tunnelAddr != "" {
 		// direct agent
-		proxy.RunAgent(*tunnelAddr, *secretFlag)
+		proxy.RunAgent(*tunnelAddr, *secretFlag, *retryFlag)
 	} else {
 		proxy.RunProxy(*socksAddr, *tunnelPort, *secretFlag)
 	}
